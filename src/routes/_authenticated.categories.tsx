@@ -32,7 +32,7 @@ function CategoriesPage() {
   const [wfCode, setWfCode] = useState("");
 
   const upsert = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!code || !name || !wfCode) throw new Error("All fields required");
       db.upsertCategory({ categoryCode: code, categoryName: name, workflowCode: wfCode });
       return true;
@@ -47,7 +47,7 @@ function CategoriesPage() {
   });
 
   const del = useMutation({
-    mutationFn: (c: string) => { db.deleteCategory(c); return true; },
+    mutationFn: async (c: string) => { db.deleteCategory(c); return true; },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["categories"] }); toast.success("Deleted"); },
   });
 

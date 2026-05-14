@@ -33,7 +33,7 @@ function TasksPage() {
   const [comments, setComments] = useState("");
 
   const actMut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const res = db.actOnTask(dialog.taskId!, dialog.action!, comments, user!.username);
       if (!res.ok) throw new Error(res.message);
       return res;

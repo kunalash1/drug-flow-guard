@@ -67,17 +67,26 @@ function extractRole(claims: Record<string, unknown> | null, username: string): 
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
+  const [user, setUser] = useState<User | null>(() => {
     const raw = typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) : null;
     if (raw) {
       try {
-        setUser(JSON.parse(raw));
+        return JSON.parse(raw);
       } catch {
-        // ignore
+        return null;
       }
     }
+    return null;
+  });
+
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === AUTH_KEY) {
+        setUser(e.newValue ? JSON.parse(e.newValue) : null);
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
   const login = async (username: string, password: string) => {

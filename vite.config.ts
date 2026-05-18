@@ -12,4 +12,17 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      proxy: {
+        "/api": {
+          target: "http://localhost:8081",
+          changeOrigin: true,
+          pathRewrite: {
+            "^/api": "/api",
+          },
+        },
+      },
+    },
+  },
 });

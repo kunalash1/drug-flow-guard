@@ -22,6 +22,18 @@ export interface WorkflowTaskRecord {
   status: string;
 }
 
+export interface AttachmentRecord {
+  attachmentId: string;
+  productCode: string;
+  documentType: "PDF" | string;
+  fileName: string;
+  mimeType: string;
+  fileData: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  osid?: string;
+}
+
 interface WorkflowStepRecord {
   workflowCode: string;
   rejectionStatus: string;
@@ -128,6 +140,36 @@ export async function listWorkflowSteps(
   });
 }
 
+export async function listAttachments(token: string): Promise<SearchResponse<AttachmentRecord>> {
+  return authenticatedRequest("/v1/Attachment", token, {
+    method: "GET",
+  });
+}
+
+export async function getAttachmentsForProduct(
+  token: string,
+  productCode: string,
+): Promise<AttachmentRecord[]> {
+  const response = await listAttachments(token);
+  return response.data.filter((attachment) => attachment.productCode === productCode);
+}
+
+export async function uploadAttachment(
+  token: string,
+  attachment: Omit<AttachmentRecord, "attachmentId" | "documentType" | "mimeType" | "uploadedAt">,
+): Promise<{ osid?: string; attachmentId: string }> {
+  return authenticatedRequest("/v1/Attachment", token, {
+    method: "POST",
+    body: JSON.stringify({
+      ...attachment,
+      attachmentId: `ATT-${Date.now()}`,
+      documentType: "PDF",
+      mimeType: "application/pdf",
+      uploadedAt: new Date().toISOString(),
+    }),
+  });
+}
+
 export async function getProductCategories(token: string): Promise<ProductCategory[]> {
   const result = await authenticatedRequest<{ data?: ProductCategory[] }>(
     "/v1/ProductCategory",
@@ -151,16 +193,21 @@ export async function createProduct(
   product: CreateProductRequest,
 ): Promise<{ osid: string; productCode: string }> {
   const productCode = `DRUG${Date.now()}`;
-  return authenticatedRequest("/v1/Product", token, {
-    method: "POST",
-    body: JSON.stringify({
-      productCode,
-      productName: product.productName,
-      manufacturer: product.manufacturer,
-      categoryCode: product.categoryCode,
-      status: "DRAFT",
-    }),
-  });
+  const created = await authenticatedRequest<{ osid: string; productCode?: string }>(
+    "/v1/Product",
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        productCode,
+        productName: product.productName,
+        manufacturer: product.manufacturer,
+        categoryCode: product.categoryCode,
+        status: "DRAFT",
+      }),
+    },
+  );
+  return { ...created, productCode: created.productCode ?? productCode };
 }
 
 interface ProductCategorySearchResponse {
@@ -266,18 +313,45 @@ export async function updateWorkflowTaskStatus(
   token: string,
   osid: string,
   status: string,
+  comments?: string,
 ): Promise<{ osid: string }> {
   return authenticatedRequest(`/v1/WorkflowTask/${osid}`, token, {
     method: "PUT",
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, ...(comments ? { comments } : {}) }),
   });
 }
 
-export async function approveWorkflowTask(token: string, task: WorkflowTaskRecord): Promise<void> {
+export async function getWorkflowTaskApprovalContext(
+  token: string,
+  task: WorkflowTaskRecord,
+): Promise<{
+  instance: ProductWorkflowInstanceRecord;
+  product: Product;
+  attachments: AttachmentRecord[];
+}> {
   const instanceResp = await searchProductWorkflowInstance(token, task.workflowInstanceId);
   const instance = instanceResp.data[0];
   if (!instance) throw new Error("Workflow instance not found for task");
 
+  const productResp = await searchProducts(token, {
+    productCode: {
+      eq: instance.productCode,
+    },
+  });
+  const product = productResp.data[0];
+  if (!product) throw new Error("Product not found for workflow instance");
+
+  const attachments = await getAttachmentsForProduct(token, instance.productCode);
+
+  return { instance, product, attachments };
+}
+
+export async function approveWorkflowTask(
+  token: string,
+  task: WorkflowTaskRecord,
+  comments?: string,
+): Promise<void> {
+  const { instance, product } = await getWorkflowTaskApprovalContext(token, task);
   const stepsResp = await listWorkflowSteps(token);
   const steps = stepsResp.data
     .filter((step) => step.workflowCode === instance.workflowCode)
@@ -287,15 +361,7 @@ export async function approveWorkflowTask(token: string, task: WorkflowTaskRecor
   if (!currentStep) throw new Error("Current workflow step not found");
 
   const taskApprovedStatus = currentStep.nextStatus || "APPROVED";
-  await updateWorkflowTaskStatus(token, task.osid, taskApprovedStatus);
-
-  const productResp = await searchProducts(token, {
-    productCode: {
-      eq: instance.productCode,
-    },
-  });
-  const product = productResp.data[0];
-  if (!product) throw new Error("Product not found for workflow instance");
+  await updateWorkflowTaskStatus(token, task.osid, taskApprovedStatus, comments);
 
   if (!nextStep) {
     await updateProductStatus(token, product.osid, "APPROVED");

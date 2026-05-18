@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { getProductCategories, createProduct } from "@/lib/api";
+import { getProductCategories, createProduct, uploadAttachment } from "@/lib/api";
+import { fileToBase64 } from "@/lib/files";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FileText, X } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -24,14 +26,16 @@ interface AddProductDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   token: string;
+  username: string;
 }
 
-export function AddProductDialog({ open, onOpenChange, token }: AddProductDialogProps) {
+export function AddProductDialog({ open, onOpenChange, token, username }: AddProductDialogProps) {
   const queryClient = useQueryClient();
 
   const [productName, setProductName] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [categoryCode, setCategoryCode] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
 
   const categoriesQ = useQuery({
     queryKey: ["productCategories", token],
@@ -40,13 +44,35 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      createProduct(token, {
+    mutationFn: async () => {
+      if (attachments.length === 0) {
+        throw new Error("Upload at least one PDF attachment");
+      }
+
+      const product = await createProduct(token, {
         productName,
         manufacturer,
         categoryCode,
         status: "DRAFT",
-      }),
+      });
+
+      await Promise.all(
+        attachments.map(async (file) => {
+          const fileData = await fileToBase64(file);
+          if (!product.productCode) {
+            throw new Error("Product code missing for attachment upload");
+          }
+          return uploadAttachment(token, {
+            productCode: product.productCode,
+            fileName: file.name,
+            fileData,
+            uploadedBy: username,
+          });
+        }),
+      );
+
+      return product;
+    },
     onSuccess: () => {
       toast.success("Product created successfully");
       queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -61,13 +87,23 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
     setProductName("");
     setManufacturer("");
     setCategoryCode("");
+    setAttachments([]);
     onOpenChange(false);
+  };
+
+  const addAttachments = (files: File[]) => {
+    const pdfFiles = files.filter((file) => file.type === "application/pdf");
+    if (pdfFiles.length !== files.length) {
+      toast.error("Only PDF attachments are supported");
+    }
+    setAttachments((current) => [...current, ...pdfFiles]);
   };
 
   const isValid =
     productName.trim() &&
     manufacturer.trim() &&
     categoryCode &&
+    attachments.length > 0 &&
     productName.length <= 50 &&
     manufacturer.length <= 50;
 
@@ -95,9 +131,7 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
                 maxLength={50}
                 disabled={createMutation.isPending}
               />
-              <p className="text-xs text-muted-foreground">
-                {productName.length}/50 characters
-              </p>
+              <p className="text-xs text-muted-foreground">{productName.length}/50 characters</p>
             </div>
           </div>
 
@@ -114,9 +148,7 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
                 maxLength={50}
                 disabled={createMutation.isPending}
               />
-              <p className="text-xs text-muted-foreground">
-                {manufacturer.length}/50 characters
-              </p>
+              <p className="text-xs text-muted-foreground">{manufacturer.length}/50 characters</p>
             </div>
           </div>
 
@@ -135,18 +167,60 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
               </div>
             )}
             {!categoriesQ.isLoading && !categoriesQ.isError && (
-              <Select value={categoryCode} onValueChange={setCategoryCode} disabled={createMutation.isPending}>
+              <Select
+                value={categoryCode}
+                onValueChange={setCategoryCode}
+                disabled={createMutation.isPending}
+              >
                 <SelectTrigger id="categoryCode">
                   <SelectValue placeholder="Select a category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.isArray(categoriesQ.data) && categoriesQ.data.map((category) => (
-                    <SelectItem key={category.categoryCode} value={category.categoryCode}>
-                      {category.categoryName || category.categoryCode}
-                    </SelectItem>
-                  ))}
+                  {Array.isArray(categoriesQ.data) &&
+                    categoriesQ.data.map((category) => (
+                      <SelectItem key={category.categoryCode} value={category.categoryCode}>
+                        {category.categoryName || category.categoryCode}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="attachments">
+              Attachments <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="attachments"
+              type="file"
+              accept="application/pdf"
+              multiple
+              onChange={(event) => addAttachments(Array.from(event.target.files ?? []))}
+              disabled={createMutation.isPending}
+            />
+            {attachments.length ? (
+              <div className="space-y-2 rounded-md border p-2">
+                {attachments.map((file, index) => (
+                  <div key={`${file.name}-${index}`} className="flex items-center gap-2 text-sm">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() =>
+                        setAttachments((current) => current.filter((_, i) => i !== index))
+                      }
+                      disabled={createMutation.isPending}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Upload at least one PDF attachment.</p>
             )}
           </div>
         </div>
@@ -155,7 +229,10 @@ export function AddProductDialog({ open, onOpenChange, token }: AddProductDialog
           <Button variant="outline" onClick={handleClose} disabled={createMutation.isPending}>
             Cancel
           </Button>
-          <Button onClick={() => createMutation.mutate()} disabled={!isValid || createMutation.isPending}>
+          <Button
+            onClick={() => createMutation.mutate()}
+            disabled={!isValid || createMutation.isPending}
+          >
             {createMutation.isPending ? "Saving..." : "Save"}
           </Button>
         </div>

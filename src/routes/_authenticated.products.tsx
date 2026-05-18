@@ -171,6 +171,7 @@ function ProductsPage() {
         open={addProductOpen}
         onOpenChange={setAddProductOpen}
         token={user?.token ?? ""}
+        username={user?.username ?? ""}
       />
 
       <Card>

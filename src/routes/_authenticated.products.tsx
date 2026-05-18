@@ -1,10 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useAuth } from "@/lib/auth";
+import { getStoredUser, useAuth } from "@/lib/auth";
+import { REVIEWER_ROLES } from "@/lib/types";
 import {
   searchProducts,
-  searchCategories,
   searchProductCategory,
   searchWorkflowSteps,
   createProductWorkflowInstance,
@@ -36,6 +36,10 @@ import { AddProductDialog } from "@/components/AddProductDialog";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/products")({
+  beforeLoad: () => {
+    const u = typeof window !== "undefined" ? getStoredUser() : null;
+    if (u && REVIEWER_ROLES.includes(u.role)) throw redirect({ to: "/tasks" });
+  },
   component: ProductsPage,
 });
 
@@ -49,15 +53,9 @@ function ProductsPage() {
     queryFn: () => searchProducts(user?.token ?? ""),
     enabled: !!user?.token,
   });
-  const categoriesQ = useQuery({
-    queryKey: ["categories", user?.token],
-    queryFn: () => searchCategories(user?.token ?? ""),
-    enabled: !!user?.token,
-  });
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   const filtered = useMemo(() => {
     const items = productsQ.data?.data ?? [];
@@ -68,16 +66,24 @@ function ProductsPage() {
         p.productCode.toLowerCase().includes(search.toLowerCase()) ||
         (p.manufacturer?.toLowerCase().includes(search.toLowerCase()) ?? false);
       const matchesStatus = statusFilter === "all" || p.status === statusFilter;
-      const matchesCat = categoryFilter === "all" || p.categoryCode === categoryFilter;
-      return matchesSearch && matchesStatus && matchesCat;
+      return matchesSearch && matchesStatus;
     });
-  }, [productsQ.data?.data, search, statusFilter, categoryFilter]);
+  }, [productsQ.data?.data, search, statusFilter]);
 
   const canCreate = user?.role === "MANUFACTURER" || user?.role === "ADMIN";
 
-  const handleSubmit = async (productId: string, productCode: string, categoryCode: string) => {
+  const handleSubmit = async (
+    productId: string,
+    productCode: string,
+    categoryCode: string,
+    status: string,
+  ) => {
     if (!user?.token) {
       toast.error("Not authenticated");
+      return;
+    }
+    if (status !== "DRAFT") {
+      toast.error("Only draft products can be submitted");
       return;
     }
 
@@ -128,11 +134,14 @@ function ProductsPage() {
         workflowInstanceId,
         stepNumber: firstStep.stepNumber,
         assignedRole: firstStep.approverRole,
-        status: "PENDING",
+        status: statusFromStepName,
       });
 
+      // Step 5: Update product status via external API when all previous calls are successful
+      await updateProductStatus(user.token, productId, "PENDING_QUALITY_REVIEW");
+
       toast.success("Workflow initiated successfully!");
-      
+
       // Refresh products list
       productsQ.refetch();
     } catch (error) {
@@ -158,11 +167,15 @@ function ProductsPage() {
         }
       />
 
-      <AddProductDialog open={addProductOpen} onOpenChange={setAddProductOpen} token={user?.token ?? ""} />
+      <AddProductDialog
+        open={addProductOpen}
+        onOpenChange={setAddProductOpen}
+        token={user?.token ?? ""}
+      />
 
       <Card>
         <CardContent className="p-4">
-          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <div className="mb-4 grid gap-3 sm:grid-cols-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -178,19 +191,17 @@ function ProductsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                {["DRAFT", "PENDING_QUALITY_REVIEW", "UNDER_MEDICAL_REVIEW", "IN_PROGRESS", "APPROVED", "REJECTED"].map((s) => (
-                  <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                {(categoriesQ.data?.data ?? []).map((c) => (
-                  <SelectItem key={c.categoryCode} value={c.categoryCode}>{c.categoryName}</SelectItem>
+                {[
+                  "DRAFT",
+                  "PENDING_QUALITY_REVIEW",
+                  "UNDER_MEDICAL_REVIEW",
+                  "IN_PROGRESS",
+                  "APPROVED",
+                  "REJECTED",
+                ].map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s.replace(/_/g, " ")}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -215,13 +226,17 @@ function ProductsPage() {
                     <TableCell className="font-medium">{p.productName}</TableCell>
                     <TableCell>{p.manufacturer}</TableCell>
                     <TableCell>{p.categoryCode}</TableCell>
-                    <TableCell><StatusBadge status={p.status} /></TableCell>
+                    <TableCell>
+                      <StatusBadge status={p.status} />
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleSubmit(p.osid, p.productCode, p.categoryCode)}
-                        disabled={submittingProductId === p.osid}
+                        onClick={() =>
+                          handleSubmit(p.osid, p.productCode, p.categoryCode, p.status)
+                        }
+                        disabled={p.status !== "DRAFT" || submittingProductId === p.osid}
                       >
                         <CheckCircle className="mr-2 h-4 w-4" />
                         {submittingProductId === p.osid ? "Submitting..." : "Submit"}
@@ -231,7 +246,10 @@ function ProductsPage() {
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                    <TableCell
+                      colSpan={6}
+                      className="py-10 text-center text-sm text-muted-foreground"
+                    >
                       No products match your filters.
                     </TableCell>
                   </TableRow>

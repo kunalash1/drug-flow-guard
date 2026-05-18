@@ -1,8 +1,10 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
+import { getStoredUser } from "@/lib/auth";
+import { REVIEWER_ROLES } from "@/lib/types";
 import { db } from "@/lib/mock-data";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -19,16 +21,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import {
-  Package,
-  ClipboardList,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  Plus,
-} from "lucide-react";
+import { Package, ClipboardList, CheckCircle2, XCircle, Clock, Plus } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
+  beforeLoad: () => {
+    const u = typeof window !== "undefined" ? getStoredUser() : null;
+    if (u && REVIEWER_ROLES.includes(u.role)) throw redirect({ to: "/tasks" });
+  },
   component: DashboardPage,
 });
 
@@ -70,14 +69,24 @@ function StatCard({
 
 function DashboardPage() {
   const { user } = useAuth();
-  if (!user) return null;
 
   const productsQ = useQuery({
-    queryKey: ["products", user.role, user.username],
-    queryFn: () => db.listProducts(user.role, user.username),
+    queryKey: ["products", user?.role, user?.username],
+    queryFn: () => db.listProducts(user?.role, user?.username),
+    enabled: !!user,
   });
-  const tasksQ = useQuery({ queryKey: ["tasks", user.role], queryFn: () => db.listTasks(user.role) });
-  const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: () => db.listCategories() });
+  const tasksQ = useQuery({
+    queryKey: ["tasks", user?.role],
+    queryFn: () => db.listTasks(user?.role),
+    enabled: !!user,
+  });
+  const categoriesQ = useQuery({
+    queryKey: ["categories"],
+    queryFn: () => db.listCategories(),
+    enabled: !!user,
+  });
+
+  if (!user) return null;
 
   const products = productsQ.data ?? [];
   const tasks = tasksQ.data ?? [];
@@ -94,9 +103,25 @@ function DashboardPage() {
 
   const statusGroups = [
     { name: "Draft", value: products.filter((p) => p.status === "DRAFT").length, color: "#94a3b8" },
-    { name: "In Review", value: products.filter((p) => ["PENDING_QUALITY_REVIEW", "UNDER_MEDICAL_REVIEW", "IN_PROGRESS"].includes(p.status)).length, color: "#0ea5e9" },
-    { name: "Approved", value: products.filter((p) => p.status === "APPROVED").length, color: "#10b981" },
-    { name: "Rejected", value: products.filter((p) => ["REJECTED", "QUALITY_REJECTED", "MEDICAL_REJECTED"].includes(p.status)).length, color: "#ef4444" },
+    {
+      name: "In Review",
+      value: products.filter((p) =>
+        ["PENDING_QUALITY_REVIEW", "UNDER_MEDICAL_REVIEW", "IN_PROGRESS"].includes(p.status),
+      ).length,
+      color: "#0ea5e9",
+    },
+    {
+      name: "Approved",
+      value: products.filter((p) => p.status === "APPROVED").length,
+      color: "#10b981",
+    },
+    {
+      name: "Rejected",
+      value: products.filter((p) =>
+        ["REJECTED", "QUALITY_REJECTED", "MEDICAL_REJECTED"].includes(p.status),
+      ).length,
+      color: "#ef4444",
+    },
   ];
 
   return (
@@ -116,7 +141,12 @@ function DashboardPage() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Products" value={products.length} icon={Package} hint={user.role === "MANUFACTURER" ? "Your products" : "All products"} />
+        <StatCard
+          title="Products"
+          value={products.length}
+          icon={Package}
+          hint={user.role === "MANUFACTURER" ? "Your products" : "All products"}
+        />
         <StatCard title="Pending Tasks" value={pending.length} icon={Clock} tone="warning" />
         <StatCard title="Approved" value={approved.length} icon={CheckCircle2} tone="success" />
         <StatCard title="Rejected" value={rejected.length} icon={XCircle} tone="danger" />
@@ -151,7 +181,14 @@ function DashboardPage() {
             <div className="h-72 w-full">
               <ResponsiveContainer>
                 <PieChart>
-                  <Pie data={statusGroups} dataKey="value" nameKey="name" innerRadius={50} outerRadius={90} paddingAngle={2}>
+                  <Pie
+                    data={statusGroups}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={90}
+                    paddingAngle={2}
+                  >
                     {statusGroups.map((s) => (
                       <Cell key={s.name} fill={s.color} />
                     ))}
@@ -181,12 +218,16 @@ function DashboardPage() {
               <div key={p.osid} className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <div className="font-medium">{p.productName}</div>
-                  <div className="text-xs text-muted-foreground">{p.productCode} · {p.manufacturer}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {p.productCode} · {p.manufacturer}
+                  </div>
                 </div>
                 <StatusBadge status={p.status} />
               </div>
             ))}
-            {products.length === 0 && <div className="text-sm text-muted-foreground">No products yet.</div>}
+            {products.length === 0 && (
+              <div className="text-sm text-muted-foreground">No products yet.</div>
+            )}
           </CardContent>
         </Card>
 
@@ -204,15 +245,22 @@ function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {pending.slice(0, 5).map((t) => (
-              <div key={t.taskId} className="flex items-center justify-between rounded-lg border p-3">
+              <div
+                key={t.taskId}
+                className="flex items-center justify-between rounded-lg border p-3"
+              >
                 <div>
                   <div className="font-medium">{t.productName}</div>
-                  <div className="text-xs text-muted-foreground">{t.stepName} · {t.assignedRole.replace(/_/g, " ")}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {t.stepName} · {t.assignedRole.replace(/_/g, " ")}
+                  </div>
                 </div>
                 <StatusBadge status={t.status} />
               </div>
             ))}
-            {pending.length === 0 && <div className="text-sm text-muted-foreground">All caught up.</div>}
+            {pending.length === 0 && (
+              <div className="text-sm text-muted-foreground">All caught up.</div>
+            )}
           </CardContent>
         </Card>
       </div>

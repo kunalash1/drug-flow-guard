@@ -13,6 +13,8 @@ export const ALL_ROLES: Role[] = [
   "DRUG_CONTROLLER",
 ];
 
+export const REVIEWER_ROLES: Role[] = ["QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"];
+
 export type ProductStatus =
   | "DRAFT"
   | "PENDING_QUALITY_REVIEW"
@@ -101,4 +103,6 @@ export interface User {
   displayName: string;
   role: Role;
   token: string;
+  refreshToken?: string;
+  expiresAt?: number;
 }

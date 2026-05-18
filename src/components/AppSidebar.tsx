@@ -30,12 +30,26 @@ interface NavItem {
 }
 
 const items: NavItem[] = [
-  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: ["ADMIN", "MANUFACTURER", "QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"] },
+  {
+    title: "Dashboard",
+    url: "/dashboard",
+    icon: LayoutDashboard,
+    roles: ["ADMIN", "MANUFACTURER"],
+  },
   { title: "Products", url: "/products", icon: Package, roles: ["ADMIN", "MANUFACTURER"] },
-  { title: "All Products", url: "/products", icon: Package, roles: ["QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"] },
-  { title: "Tasks", url: "/tasks", icon: CheckSquare, roles: ["ADMIN", "QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"] },
+  {
+    title: "Tasks",
+    url: "/tasks",
+    icon: CheckSquare,
+    roles: ["ADMIN", "QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"],
+  },
   { title: "Categories", url: "/categories", icon: Layers, roles: ["ADMIN"] },
-  { title: "Workflows", url: "/workflows", icon: Workflow, roles: ["ADMIN"] },
+  {
+    title: "Workflows",
+    url: "/workflows",
+    icon: Workflow,
+    roles: ["ADMIN", "QUALITY_OFFICER", "MEDICAL_OFFICER", "DRUG_CONTROLLER"],
+  },
   { title: "Reports", url: "/reports", icon: BarChart3, roles: ["ADMIN"] },
 ];
 
@@ -65,7 +79,10 @@ export function AppSidebar() {
             <SidebarMenu>
               {visible.map((item) => (
                 <SidebarMenuItem key={item.title + item.url}>
-                  <SidebarMenuButton asChild isActive={path === item.url || path.startsWith(item.url + "/")}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={path === item.url || path.startsWith(item.url + "/")}
+                  >
                     <Link to={item.url}>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>

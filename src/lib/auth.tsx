@@ -4,15 +4,16 @@ import type { Role, User } from "./types";
 const AUTH_KEY = "drugreg_auth_v1";
 
 const KEYCLOAK_URL =
-  (import.meta.env.VITE_KEYCLOAK_URL as string | undefined) ??
-  "http://localhost:8080";
-const KEYCLOAK_REALM =
-  (import.meta.env.VITE_KEYCLOAK_REALM as string | undefined) ?? "sunbird-rc";
+  (import.meta.env.VITE_KEYCLOAK_URL as string | undefined) ?? "http://localhost:8080";
+const KEYCLOAK_REALM = (import.meta.env.VITE_KEYCLOAK_REALM as string | undefined) ?? "sunbird-rc";
 const KEYCLOAK_CLIENT_ID =
   (import.meta.env.VITE_KEYCLOAK_CLIENT_ID as string | undefined) ?? "admin-api";
 const KEYCLOAK_CLIENT_SECRET =
   (import.meta.env.VITE_KEYCLOAK_CLIENT_SECRET as string | undefined) ??
   "d64775a0-850e-4639-aa56-9f352187cb4b";
+const AUTH_CHANGE_EVENT = "drugreg_auth_change";
+const TOKEN_REFRESH_BUFFER_MS = 30_000;
+let refreshPromise: Promise<User | null> | null = null;
 
 interface AuthContextValue {
   user: User | null;
@@ -31,6 +32,27 @@ function decodeJwt(token: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function getTokenUrl() {
+  return `${KEYCLOAK_URL}/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token`;
+}
+
+function persistUser(user: User | null) {
+  if (user) {
+    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+  } else {
+    localStorage.removeItem(AUTH_KEY);
+  }
+  window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
+}
+
+function getTokenExpiry(token: string, expiresIn?: number) {
+  if (expiresIn) return Date.now() + expiresIn * 1000;
+
+  const claims = decodeJwt(token);
+  const exp = claims?.["exp"];
+  return typeof exp === "number" ? exp * 1000 : undefined;
 }
 
 const ROLE_CANDIDATES: Role[] = [
@@ -80,19 +102,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
+    const syncUser = () => setUser(getStoredUser());
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === AUTH_KEY) {
-        setUser(e.newValue ? JSON.parse(e.newValue) : null);
+        syncUser();
       }
     };
+    window.addEventListener(AUTH_CHANGE_EVENT, syncUser);
     window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener(AUTH_CHANGE_EVENT, syncUser);
+      window.removeEventListener("storage", handleStorageChange);
+    };
   }, []);
 
   const login = async (username: string, password: string) => {
     if (!username || !password) throw new Error("Username and password required");
 
-    const tokenUrl = `${KEYCLOAK_URL}/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token`;
     const body = new URLSearchParams({
       client_id: KEYCLOAK_CLIENT_ID,
       client_secret: KEYCLOAK_CLIENT_SECRET,
@@ -102,22 +128,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     let token: string;
+    let refreshToken: string | undefined;
+    let expiresAt: number | undefined;
     let claims: Record<string, unknown> | null = null;
     try {
-      const res = await fetch(tokenUrl, {
+      const res = await fetch(getTokenUrl(), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(
-          `Keycloak login failed (${res.status})${text ? `: ${text}` : ""}`,
-        );
+        throw new Error(`Keycloak login failed (${res.status})${text ? `: ${text}` : ""}`);
       }
-      const data = (await res.json()) as { access_token?: string };
+      const data = (await res.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
       if (!data.access_token) throw new Error("No access_token returned by Keycloak");
       token = data.access_token;
+      refreshToken = data.refresh_token;
+      expiresAt = getTokenExpiry(token, data.expires_in);
       claims = decodeJwt(token);
     } catch (err) {
       // Network/CORS failure — surface a clear message.
@@ -134,27 +166,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       username;
 
     const authedUser: User = {
-      username:
-        (claims?.["preferred_username"] as string | undefined) || username,
+      username: (claims?.["preferred_username"] as string | undefined) || username,
       displayName,
       role,
       token,
+      refreshToken,
+      expiresAt,
     };
-    localStorage.setItem(AUTH_KEY, JSON.stringify(authedUser));
+    persistUser(authedUser);
     setUser(authedUser);
   };
 
   const logout = () => {
-    localStorage.removeItem(AUTH_KEY);
+    persistUser(null);
     setUser(null);
   };
 
   const hasRole = (...roles: Role[]) => !!user && roles.includes(user.role);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, hasRole }}>
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={{ user, login, logout, hasRole }}>{children}</AuthContext.Provider>
   );
 }
 
@@ -173,4 +204,69 @@ export function getStoredUser(): User | null {
   } catch {
     return null;
   }
+}
+
+export function logoutStoredUser() {
+  if (typeof window === "undefined") return;
+  persistUser(null);
+}
+
+export async function refreshStoredUserToken(): Promise<User | null> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = refreshStoredUserTokenOnce().finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+async function refreshStoredUserTokenOnce(): Promise<User | null> {
+  const current = getStoredUser();
+  if (!current?.refreshToken) return null;
+
+  const body = new URLSearchParams({
+    client_id: KEYCLOAK_CLIENT_ID,
+    client_secret: KEYCLOAK_CLIENT_SECRET,
+    grant_type: "refresh_token",
+    refresh_token: current.refreshToken,
+  });
+
+  const res = await fetch(getTokenUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
+  if (!data.access_token) return null;
+
+  const updated: User = {
+    ...current,
+    token: data.access_token,
+    refreshToken: data.refresh_token ?? current.refreshToken,
+    expiresAt: getTokenExpiry(data.access_token, data.expires_in),
+  };
+  persistUser(updated);
+  return updated;
+}
+
+export async function getValidAccessToken(fallbackToken?: string): Promise<string | null> {
+  const current = getStoredUser();
+  if (!current) return fallbackToken ?? null;
+
+  if (
+    current.token &&
+    (!current.expiresAt || current.expiresAt - TOKEN_REFRESH_BUFFER_MS > Date.now())
+  ) {
+    return current.token;
+  }
+
+  const refreshed = await refreshStoredUserToken();
+  return refreshed?.token ?? fallbackToken ?? null;
 }

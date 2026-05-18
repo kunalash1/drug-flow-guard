@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { useAuth } from "@/lib/auth";
+import { getStoredUser, useAuth } from "@/lib/auth";
+import { REVIEWER_ROLES } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,8 +25,11 @@ function LoginPage() {
     setLoading(true);
     try {
       await login(username, password);
-      toast.success("Signed in via Keycloak");
-      navigate({ to: "/dashboard" });
+      toast.success("Signed in");
+      const signedInUser = getStoredUser();
+      navigate({
+        to: signedInUser && REVIEWER_ROLES.includes(signedInUser.role) ? "/tasks" : "/dashboard",
+      });
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -72,17 +76,28 @@ function LoginPage() {
           <Card className="border-border/60 shadow-xl">
             <CardHeader>
               <CardTitle className="text-2xl">Sign in</CardTitle>
-              <CardDescription>Authenticate via Keycloak to access the registry.</CardDescription>
+              <CardDescription>Authenticate to access the registry.</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={onSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="username">Username</Label>
-                  <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+                  <Input
+                    id="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password">Password</Label>
-                  <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Signing in…" : "Sign in"}
